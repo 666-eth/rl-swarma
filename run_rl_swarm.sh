@@ -71,7 +71,7 @@ EOF
 # Use default values without prompting
 CONNECT_TO_TESTNET=true
 USE_BIG_SWARM=false
-PARAM_B=1.5
+PARAM_B=0.5
 
 if [ "$USE_BIG_SWARM" = true ]; then
     SWARM_CONTRACT="$BIG_SWARM_CONTRACT"
