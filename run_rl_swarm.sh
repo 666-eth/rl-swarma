@@ -1,56 +1,201 @@
 #!/bin/bash
 
-BOLD="\e[1m"
-RED="\e[31m"
-GREEN="\e[32m"
-YELLOW="\e[33m"
-NC="\e[0m"
+set -euo pipefail
 
-SWARM_DIR="$HOME/rl-swarm"
-TEMP_DATA_PATH="$SWARM_DIR/modal-login/temp-data"
-HOME_DIR="$HOME"
+# General arguments
+ROOT=$PWD
 
-cd $HOME
+export PUB_MULTI_ADDRS
+export PEER_MULTI_ADDRS
+export HOST_MULTI_ADDRS
+export IDENTITY_PATH
+export CONNECT_TO_TESTNET
+export ORG_ID
+export HF_HUB_DOWNLOAD_TIMEOUT=120  # 2 minutes
 
-if [ -f "$SWARM_DIR/swarm.pem" ]; then
-    echo -e "${BOLD}${YELLOW}You already have an existing ${GREEN}swarm.pem${YELLOW} file.${NC}\n"
-    echo -e "${BOLD}${YELLOW}Do you want to:${NC}"
-    echo -e "${BOLD}1) Use the existing swarm.pem${NC}"
-    echo -e "${BOLD}${RED}2) Delete existing swarm.pem and start fresh${NC}"
+# Check if public multi-address is given else set to default
+DEFAULT_PUB_MULTI_ADDRS=""
+PUB_MULTI_ADDRS=${PUB_MULTI_ADDRS:-$DEFAULT_PUB_MULTI_ADDRS}
 
-    while true; do
-        read -p $'\e[1mEnter your choice (1 or 2): \e[0m' choice
-        if [ "$choice" == "1" ]; then
-            echo -e "\n${BOLD}${YELLOW}[✓] Using existing swarm.pem...${NC}"
-            mv "$SWARM_DIR/swarm.pem" "$HOME_DIR/"
-            mv "$TEMP_DATA_PATH/userData.json" "$HOME_DIR/" 2>/dev/null
-            mv "$TEMP_DATA_PATH/userApiKey.json" "$HOME_DIR/" 2>/dev/null
+# Check if peer multi-address is given else set to default
+DEFAULT_PEER_MULTI_ADDRS="/ip4/38.101.215.13/tcp/30002/p2p/QmQ2gEXoPJg6iMBSUFWGzAabS2VhnzuS782Y637hGjfsRJ"
+PEER_MULTI_ADDRS=${PEER_MULTI_ADDRS:-$DEFAULT_PEER_MULTI_ADDRS}
 
-            rm -rf "$SWARM_DIR"
+# Check if host multi-address is given else set to default
+DEFAULT_HOST_MULTI_ADDRS="/ip4/0.0.0.0/tcp/38331"
+HOST_MULTI_ADDRS=${HOST_MULTI_ADDRS:-$DEFAULT_HOST_MULTI_ADDRS}
 
-            echo -e "${BOLD}${YELLOW}[✓] Cloning fresh repository...${NC}"
-            cd $HOME && git clone https://github.com/zunxbt/rl-swarm.git > /dev/null 2>&1
+DEFAULT_IDENTITY_PATH="$ROOT"/swarm.pem
+IDENTITY_PATH=${IDENTITY_PATH:-$DEFAULT_IDENTITY_PATH}
 
-            mv "$HOME_DIR/swarm.pem" rl-swarm/
-            mv "$HOME_DIR/userData.json" rl-swarm/modal-login/temp-data/ 2>/dev/null
-            mv "$HOME_DIR/userApiKey.json" rl-swarm/modal-login/temp-data/ 2>/dev/null
-            break
-        elif [ "$choice" == "2" ]; then
-            echo -e "${BOLD}${YELLOW}[✓] Removing existing folder and starting fresh...${NC}"
-            rm -rf "$SWARM_DIR"
-            sleep 2
-            cd $HOME && git clone https://github.com/zunxbt/rl-swarm.git > /dev/null 2>&1
-            break
-        else
-            echo -e "\n${BOLD}${RED}[✗] Invalid choice. Please enter 1 or 2.${NC}"
-        fi
-    done
+SMALL_SWARM_CONTRACT="0x69C6e1D608ec64885E7b185d39b04B491a71768C"
+BIG_SWARM_CONTRACT="0x6947c6E196a48B77eFa9331EC1E3e45f3Ee5Fd58"
+
+CPU_ONLY=${CPU_ONLY:-""}
+ORG_ID=${ORG_ID:-""}
+
+GREEN_TEXT="\033[32m"
+BLUE_TEXT="\033[34m"
+RESET_TEXT="\033[0m"
+
+echo_green() {
+    echo -e "$GREEN_TEXT$1$RESET_TEXT"
+}
+
+echo_blue() {
+    echo -e "$BLUE_TEXT$1$RESET_TEXT"
+}
+
+ROOT_DIR="$(cd $(dirname ${BASH_SOURCE[0]}) && pwd)"
+
+cleanup() {
+    echo_green ">> Shutting down trainer..."
+    rm -r $ROOT_DIR/modal-login/temp-data/*.json 2> /dev/null || true
+    kill -- -$$ || true
+    exit 0
+}
+
+trap cleanup EXIT
+
+cat << "EOF"
+    ██████  ██            ███████ ██     ██  █████  ██████  ███    ███
+    ██   ██ ██            ██      ██     ██ ██   ██ ██   ██ ████  ████
+    ██████  ██      █████ ███████ ██  █  ██ ███████ ██████  ██ ████ ██
+    ██   ██ ██                 ██ ██ ███ ██ ██   ██ ██   ██ ██  ██  ██
+    ██   ██ ███████       ███████  ███ ███  ██   ██ ██   ██ ██      ██
+
+    From Gensyn
+
+EOF
+
+# Use default values without prompting
+CONNECT_TO_TESTNET=true
+USE_BIG_SWARM=false
+PARAM_B=0.5
+
+if [ "$USE_BIG_SWARM" = true ]; then
+    SWARM_CONTRACT="$BIG_SWARM_CONTRACT"
 else
-    echo -e "${BOLD}${YELLOW}[✓] No existing swarm.pem found. Cloning repository...${NC}"
-    cd $HOME && [ -d rl-swarm ] && rm -rf rl-swarm; git clone https://github.com/zunxbt/rl-swarm.git > /dev/null 2>&1
+    SWARM_CONTRACT="$SMALL_SWARM_CONTRACT"
 fi
 
-cd rl-swarm || { echo -e "${BOLD}${RED}[✗] Failed to enter rl-swarm directory. Exiting.${NC}"; exit 1; }
+if [ "$CONNECT_TO_TESTNET" = true ]; then
+    echo "Please login to create an Ethereum Server Wallet"
+    cd modal-login
 
-echo -e "${BOLD}${YELLOW}[✓] Running rl-swarm...${NC}"
-./run_rl_swarm.sh
+    if ! command -v node > /dev/null 2>&1; then
+        echo "Node.js not found. Installing NVM and latest Node.js..."
+        export NVM_DIR="$HOME/.nvm"
+        if [ ! -d "$NVM_DIR" ]; then
+            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+        fi
+        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+        [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+        nvm install node
+    fi
+
+    if ! command -v yarn > /dev/null 2>&1; then
+        if grep -qi "ubuntu" /etc/os-release 2> /dev/null || uname -r | grep -qi "microsoft"; then
+            echo "Detected Ubuntu or WSL Ubuntu. Installing Yarn via apt..."
+            curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | sudo apt-key add -
+            echo "deb https://dl.yarnpkg.com/debian/ stable main" | sudo tee /etc/apt/sources.list.d/yarn.list
+            sudo apt update && sudo apt install -y yarn
+        else
+            npm install -g --silent yarn
+        fi
+    fi
+
+    yarn install
+    yarn dev > /dev/null 2>&1 &
+
+    SERVER_PID=$!
+    echo "Started server process: $SERVER_PID"
+    sleep 5
+
+    if open http://localhost:3000 2> /dev/null; then
+        echo_green ">> Successfully opened http://localhost:3000 in your default browser."
+    else
+        echo ">> Failed to open http://localhost:3000. Please open it manually."
+    fi
+
+    cd ..
+
+    echo_green ">> Waiting for modal userData.json to be created..."
+    while [ ! -f "modal-login/temp-data/userData.json" ]; do
+        sleep 5
+    done
+
+    ORG_ID=$(awk 'BEGIN { FS = "\"" } !/^[ \t]*[{}]/ { print $(NF - 1); exit }' modal-login/temp-data/userData.json)
+    echo "Your ORG_ID is set to: $ORG_ID"
+
+    echo "Waiting for API key to become activated..."
+    while true; do
+        STATUS=$(curl -s "http://localhost:3000/api/get-api-key-status?orgId=$ORG_ID")
+        if [[ "$STATUS" == "activated" ]]; then
+            echo "API key is activated! Proceeding..."
+            break
+        else
+            sleep 5
+        fi
+    done
+
+    ENV_FILE="$ROOT"/modal-login/.env
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        sed -i '' "3s/.*/SMART_CONTRACT_ADDRESS=$SWARM_CONTRACT/" "$ENV_FILE"
+    else
+        sed -i "3s/.*/SMART_CONTRACT_ADDRESS=$SWARM_CONTRACT/" "$ENV_FILE"
+    fi
+fi
+
+echo_green ">> Getting requirements..."
+
+pip install --upgrade pip
+if [ -n "$CPU_ONLY" ] || ! command -v nvidia-smi &> /dev/null; then
+    pip install -r "$ROOT"/requirements-cpu.txt
+    CONFIG_PATH="$ROOT/hivemind_exp/configs/mac/grpo-qwen-2.5-0.5b-deepseek-r1.yaml"
+    GAME="gsm8k"
+else
+    pip install -r "$ROOT"/requirements-gpu.txt
+    pip install flash-attn --no-build-isolation
+    case "$PARAM_B" in
+        32 | 72) CONFIG_PATH="$ROOT/hivemind_exp/configs/gpu/grpo-qwen-2.5-${PARAM_B}b-bnb-4bit-deepseek-r1.yaml" ;;
+        0.5 | 1.5 | 7) CONFIG_PATH="$ROOT/hivemind_exp/configs/gpu/grpo-qwen-2.5-${PARAM_B}b-deepseek-r1.yaml" ;;
+    esac
+    if [ "$USE_BIG_SWARM" = true ]; then
+        GAME="dapo"
+    else
+        GAME="gsm8k"
+    fi
+fi
+
+HF_TOKEN=${HF_TOKEN:-""}
+if [ -n "${HF_TOKEN}" ]; then
+    HUGGINGFACE_ACCESS_TOKEN=${HF_TOKEN}
+else
+    HUGGINGFACE_ACCESS_TOKEN="None"
+fi
+
+echo_green ">> Good luck in the swarm!"
+echo_blue ">> Post about rl-swarm on X/twitter! --> https://tinyurl.com/swarmtweet"
+echo_blue ">> And remember to star the repo on GitHub! --> https://github.com/gensyn-ai/rl-swarm"
+
+if [ -n "$ORG_ID" ]; then
+    python -m hivemind_exp.gsm8k.train_single_gpu \
+        --hf_token "$HUGGINGFACE_ACCESS_TOKEN" \
+        --identity_path "$IDENTITY_PATH" \
+        --modal_org_id "$ORG_ID" \
+        --contract_address "$SWARM_CONTRACT" \
+        --config "$CONFIG_PATH" \
+        --game "$GAME"
+else
+    python -m hivemind_exp.gsm8k.train_single_gpu \
+        --hf_token "$HUGGINGFACE_ACCESS_TOKEN" \
+        --identity_path "$IDENTITY_PATH" \
+        --public_maddr "$PUB_MULTI_ADDRS" \
+        --initial_peers "$PEER_MULTI_ADDRS" \
+        --host_maddr "$HOST_MULTI_ADDRS" \
+        --config "$CONFIG_PATH" \
+        --game "$GAME"
+fi
+
+wait
